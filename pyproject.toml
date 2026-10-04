@@ -1,0 +1,11 @@
+[project]
+name = "tekz-auto-news"
+version = "0.1.0"
+description = "A Telegram bot that curates technology and AI news in Arabic."
+requires-python = ">=3.12"
+dependencies = [
+    "feedparser>=6.0.14",
+    "openai>=3.24.0",
+    "python-dotenv>=1.2.4",
+    "requests>=2.34.2",
+]
