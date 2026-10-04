@@ -4,18 +4,19 @@ import logging
 import signal
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from tekz_auto_news.config import Settings, load_settings
 from tekz_auto_news.database import NewsDatabase
 from tekz_auto_news.images import ImageResolver
 from tekz_auto_news.models import NewsArticle
-from tekz_auto_news.openai_rewriter import ArabicNewsRewriter
+from tekz_auto_news.openai_rewriter import ArabicNewsRewriter, OpenAICreditsUnavailable
 from tekz_auto_news.rss_reader import fetch_latest, load_sources
 from tekz_auto_news.telegram_publisher import TelegramPublisher
 
 logger = logging.getLogger("tekz_auto_news")
 _running = True
+_openai_retry_after: datetime | None = None
 
 
 def _handle_shutdown(signum: int, _frame: object) -> None:
@@ -31,6 +32,16 @@ def _publish_cycle(
     publisher: TelegramPublisher,
     image_resolver: ImageResolver,
 ) -> int:
+    global _openai_retry_after
+    now = datetime.now(timezone.utc)
+    if _openai_retry_after and now < _openai_retry_after:
+        logger.warning(
+            "OpenAI requests are paused after an exhausted credit balance; retry after %s.",
+            _openai_retry_after.isoformat(timespec="minutes"),
+        )
+        return 0
+    _openai_retry_after = None
+
     sources = load_sources(settings.sources_path)
     articles = fetch_latest(
         sources,
@@ -70,6 +81,17 @@ def _publish_cycle(
                 article.source_name,
                 message_id,
             )
+        except OpenAICreditsUnavailable as exc:
+            try:
+                database.mark_failed(article, str(exc))
+            except Exception:
+                logger.exception("Could not save the failed status for an article.")
+            _openai_retry_after = datetime.now(timezone.utc) + timedelta(hours=6)
+            logger.error(
+                "%s OpenAI requests will pause for six hours; add credits and restart the workflow to resume sooner.",
+                exc,
+            )
+            break
         except Exception as exc:
             try:
                 database.mark_failed(article, f"{type(exc).__name__}: {exc}")

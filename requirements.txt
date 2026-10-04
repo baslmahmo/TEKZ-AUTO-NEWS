@@ -2,3 +2,7 @@ feedparser>=6.0.14
 openai>=3.24.0
 python-dotenv>=1.2.4
 requests>=2.34.2
+feedparser
+openai
+python-dotenv
+requests

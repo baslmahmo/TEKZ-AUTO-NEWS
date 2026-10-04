@@ -82,6 +82,7 @@ class NewsDatabase:
             row = connection.execute(
                 """
                 SELECT id, status, last_attempt_at
+                       , last_error
                 FROM articles
                 WHERE article_url = ? OR fingerprint = ?
                 LIMIT 1
@@ -93,7 +94,12 @@ class NewsDatabase:
                 if row["status"] in {"posted", "skipped"}:
                     return False
                 last_attempt = row["last_attempt_at"]
-                if last_attempt:
+                last_error = str(row["last_error"] or "").lower()
+                quota_failure = any(
+                    marker in last_error
+                    for marker in ("credit_balance_exhausted", "insufficient_quota", "openai api credits are exhausted")
+                )
+                if last_attempt and not quota_failure:
                     try:
                         attempted_at = datetime.fromisoformat(last_attempt)
                     except ValueError:
