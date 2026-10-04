@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import logging
 import signal
 import sys
@@ -32,6 +33,8 @@ def _publish_cycle(
     rewriter: ArabicNewsRewriter,
     publisher: TelegramPublisher,
     image_resolver: ImageResolver,
+    *,
+    max_articles_per_cycle: int | None = None,
 ) -> int:
     global _openai_retry_after, _telegram_paused
     if _telegram_paused:
@@ -50,6 +53,7 @@ def _publish_cycle(
     _openai_retry_after = None
 
     sources = load_sources(settings.sources_path)
+    cycle_limit = max_articles_per_cycle or settings.max_articles_per_cycle
     articles = fetch_latest(
         sources,
         timeout_seconds=settings.fetch_timeout_seconds,
@@ -59,9 +63,9 @@ def _publish_cycle(
 
     first_scan = database.is_empty()
     first_scan_backlog: list[NewsArticle] = []
-    if first_scan and len(articles) > settings.max_articles_per_cycle:
-        first_scan_backlog = articles[settings.max_articles_per_cycle :]
-        articles = articles[: settings.max_articles_per_cycle]
+    if first_scan and len(articles) > cycle_limit:
+        first_scan_backlog = articles[cycle_limit:]
+        articles = articles[:cycle_limit]
         logger.info(
             "First run: limiting initial publishing to %s recent stories; the remaining %s items will be skipped.",
             len(articles),
@@ -71,7 +75,7 @@ def _publish_cycle(
     published = 0
     attempted = 0
     for article in articles:
-        if not _running or attempted >= settings.max_articles_per_cycle:
+        if not _running or attempted >= cycle_limit:
             break
         if not database.claim(article):
             continue
@@ -131,6 +135,14 @@ def _publish_cycle(
 
 def main() -> None:
     global _running
+    parser = argparse.ArgumentParser(description="Run the TEKZ-AUTO-NEWS Telegram bot.")
+    parser.add_argument(
+        "--test-one-post",
+        action="store_true",
+        help="Limit the first publishing cycle to one article, then resume normal limits.",
+    )
+    args = parser.parse_args()
+
     try:
         settings = load_settings()
     except Exception as exc:
@@ -158,16 +170,27 @@ def main() -> None:
             bot_username,
             settings.poll_interval_minutes,
         )
+        if args.test_one_post:
+            logger.info("One-post test enabled: the first cycle is limited to one article.")
     except Exception as exc:
         logger.error("Could not verify Telegram bot access: %s", exc)
         raise SystemExit(1) from exc
 
+    first_cycle = True
     while _running:
         cycle_started = time.monotonic()
         try:
-            _publish_cycle(settings, database, rewriter, publisher, image_resolver)
+            _publish_cycle(
+                settings,
+                database,
+                rewriter,
+                publisher,
+                image_resolver,
+                max_articles_per_cycle=1 if args.test_one_post and first_cycle else None,
+            )
         except Exception:
             logger.exception("The news scan failed; the bot will retry at the next interval.")
+        first_cycle = False
 
         remaining = max(
             0,

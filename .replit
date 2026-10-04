@@ -24,12 +24,12 @@ args = "TEKZ-AUTO-NEWS Bot"
 name = "TEKZ-AUTO-NEWS Bot"
 author = "agent"
 
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "python main.py"
-
 [workflows.workflow.metadata]
 outputType = "console"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "python main.py --test-one-post"
 
 [agent]
 stack = "PNPM_WORKSPACE"

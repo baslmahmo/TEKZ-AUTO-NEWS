@@ -85,7 +85,11 @@ class TelegramPublisher:
 
         if not response.ok or not payload.get("ok"):
             description = str(payload.get("description", "Unknown Telegram API error"))
-            if "not enough rights" in description.lower():
+            lowered_description = description.lower()
+            if any(
+                marker in lowered_description
+                for marker in ("not enough rights", "bot was kicked", "bot was blocked", "chat not found")
+            ):
                 raise TelegramPermissionError(f"{operation} failed: {description}")
             raise RuntimeError(f"{operation} failed: {description}")
         return payload

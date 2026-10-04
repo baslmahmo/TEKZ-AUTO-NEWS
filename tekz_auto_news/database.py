@@ -95,7 +95,7 @@ class NewsDatabase:
                     return False
                 last_attempt = row["last_attempt_at"]
                 last_error = str(row["last_error"] or "").lower()
-                quota_failure = any(
+                bypass_retry_window = any(
                     marker in last_error
                     for marker in (
                         "credit_balance_exhausted",
@@ -106,9 +106,12 @@ class NewsDatabase:
                         "payment required",
                         "not enough rights",
                         "telegram permission",
+                        "bot was kicked",
+                        "bot was blocked",
+                        "chat not found",
                     )
                 )
-                if last_attempt and not quota_failure:
+                if last_attempt and not bypass_retry_window:
                     try:
                         attempted_at = datetime.fromisoformat(last_attempt)
                     except ValueError:
