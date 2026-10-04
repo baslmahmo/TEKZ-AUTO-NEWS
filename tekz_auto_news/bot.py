@@ -10,13 +10,14 @@ from tekz_auto_news.config import Settings, load_settings
 from tekz_auto_news.database import NewsDatabase
 from tekz_auto_news.images import ImageResolver
 from tekz_auto_news.models import NewsArticle
-from tekz_auto_news.openai_rewriter import ArabicNewsRewriter, OpenAICreditsUnavailable
+from tekz_auto_news.openai_rewriter import ArabicNewsRewriter, ProviderCreditsUnavailable
 from tekz_auto_news.rss_reader import fetch_latest, load_sources
-from tekz_auto_news.telegram_publisher import TelegramPublisher
+from tekz_auto_news.telegram_publisher import TelegramPermissionError, TelegramPublisher
 
 logger = logging.getLogger("tekz_auto_news")
 _running = True
 _openai_retry_after: datetime | None = None
+_telegram_paused = False
 
 
 def _handle_shutdown(signum: int, _frame: object) -> None:
@@ -32,11 +33,17 @@ def _publish_cycle(
     publisher: TelegramPublisher,
     image_resolver: ImageResolver,
 ) -> int:
-    global _openai_retry_after
+    global _openai_retry_after, _telegram_paused
+    if _telegram_paused:
+        logger.warning(
+            "Telegram publishing is paused after a permission error; grant channel posting rights and restart the workflow."
+        )
+        return 0
+
     now = datetime.now(timezone.utc)
     if _openai_retry_after and now < _openai_retry_after:
         logger.warning(
-            "OpenAI requests are paused after an exhausted credit balance; retry after %s.",
+            "OpenRouter requests are paused after an exhausted credit balance; retry after %s.",
             _openai_retry_after.isoformat(timespec="minutes"),
         )
         return 0
@@ -81,14 +88,25 @@ def _publish_cycle(
                 article.source_name,
                 message_id,
             )
-        except OpenAICreditsUnavailable as exc:
+        except ProviderCreditsUnavailable as exc:
             try:
                 database.mark_failed(article, str(exc))
             except Exception:
                 logger.exception("Could not save the failed status for an article.")
             _openai_retry_after = datetime.now(timezone.utc) + timedelta(hours=6)
             logger.error(
-                "%s OpenAI requests will pause for six hours; add credits and restart the workflow to resume sooner.",
+                "%s OpenRouter requests will pause for six hours; add credits and restart the workflow to resume sooner.",
+                exc,
+            )
+            break
+        except TelegramPermissionError as exc:
+            try:
+                database.mark_failed(article, str(exc))
+            except Exception:
+                logger.exception("Could not save the failed status for an article.")
+            _telegram_paused = True
+            logger.error(
+                "%s Grant the bot permission to post in the channel, then restart the workflow.",
                 exc,
             )
             break
@@ -129,7 +147,7 @@ def main() -> None:
     signal.signal(signal.SIGTERM, _handle_shutdown)
 
     database = NewsDatabase(settings.database_path)
-    rewriter = ArabicNewsRewriter(settings.openai_api_key, settings.openai_model)
+    rewriter = ArabicNewsRewriter(settings.openrouter_api_key, settings.openrouter_model)
     publisher = TelegramPublisher(settings.telegram_bot_token, settings.telegram_chat_id)
     image_resolver = ImageResolver(settings.fetch_timeout_seconds)
 

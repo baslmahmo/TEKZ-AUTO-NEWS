@@ -10,10 +10,10 @@ from dotenv import load_dotenv
 
 @dataclass(frozen=True)
 class Settings:
-    openai_api_key: str
+    openrouter_api_key: str
     telegram_bot_token: str
     telegram_chat_id: str
-    openai_model: str
+    openrouter_model: str
     poll_interval_minutes: int
     max_articles_per_cycle: int
     max_article_age_hours: int
@@ -52,7 +52,7 @@ def load_settings() -> Settings:
     """Load settings from Replit environment variables or a local .env file."""
     load_dotenv()
 
-    required = ("OPENAI_API_KEY", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID")
+    required = ("OPENROUTER_API_KEY", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID")
     missing = [name for name in required if not os.getenv(name, "").strip()]
     if missing:
         names = ", ".join(missing)
@@ -66,10 +66,10 @@ def load_settings() -> Settings:
         raise ValueError("LOG_LEVEL must be DEBUG, INFO, WARNING, ERROR, or CRITICAL.")
 
     return Settings(
-        openai_api_key=os.environ["OPENAI_API_KEY"].strip(),
+        openrouter_api_key=os.environ["OPENROUTER_API_KEY"].strip(),
         telegram_bot_token=os.environ["TELEGRAM_BOT_TOKEN"].strip(),
         telegram_chat_id=_normalize_telegram_chat_id(os.environ["TELEGRAM_CHAT_ID"]),
-        openai_model=os.getenv("OPENAI_MODEL", "gpt-4o-mini").strip(),
+        openrouter_model=os.getenv("OPENROUTER_MODEL", "openai/gpt-4o-mini").strip(),
         poll_interval_minutes=_positive_int("POLL_INTERVAL_MINUTES", 15),
         max_articles_per_cycle=_positive_int("MAX_ARTICLES_PER_CYCLE", 3),
         max_article_age_hours=_positive_int("MAX_ARTICLE_AGE_HOURS", 72),

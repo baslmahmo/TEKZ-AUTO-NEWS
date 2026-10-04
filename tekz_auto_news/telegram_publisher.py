@@ -12,6 +12,10 @@ logger = logging.getLogger(__name__)
 TELEGRAM_CAPTION_LIMIT = 1024
 
 
+class TelegramPermissionError(RuntimeError):
+    """Raised when Telegram refuses to publish because the bot lacks channel rights."""
+
+
 def _short_caption(article: NewsArticle, rewrite: ArabicRewrite) -> str:
     title = html.escape(rewrite.title, quote=False)
     source = html.escape(article.source_name, quote=False)
@@ -81,5 +85,7 @@ class TelegramPublisher:
 
         if not response.ok or not payload.get("ok"):
             description = str(payload.get("description", "Unknown Telegram API error"))
+            if "not enough rights" in description.lower():
+                raise TelegramPermissionError(f"{operation} failed: {description}")
             raise RuntimeError(f"{operation} failed: {description}")
         return payload

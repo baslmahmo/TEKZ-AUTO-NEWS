@@ -97,7 +97,16 @@ class NewsDatabase:
                 last_error = str(row["last_error"] or "").lower()
                 quota_failure = any(
                     marker in last_error
-                    for marker in ("credit_balance_exhausted", "insufficient_quota", "openai api credits are exhausted")
+                    for marker in (
+                        "credit_balance_exhausted",
+                        "insufficient_quota",
+                        "openai api credits are exhausted",
+                        "insufficient credits",
+                        "credits exhausted",
+                        "payment required",
+                        "not enough rights",
+                        "telegram permission",
+                    )
                 )
                 if last_attempt and not quota_failure:
                     try:
