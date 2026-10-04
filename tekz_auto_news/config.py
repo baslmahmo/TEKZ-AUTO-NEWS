@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from dotenv import load_dotenv
 
@@ -33,6 +34,20 @@ def _positive_int(name: str, default: int, *, minimum: int = 1) -> int:
     return value
 
 
+def _normalize_telegram_chat_id(value: str) -> str:
+    value = value.strip()
+    parsed = urlsplit(value)
+    if parsed.scheme.lower() in {"http", "https"} and parsed.hostname:
+        if parsed.hostname.lower() in {"t.me", "www.t.me", "telegram.me", "www.telegram.me"}:
+            username = parsed.path.strip("/")
+            if not username or "/" in username or username.startswith("+"):
+                raise ValueError(
+                    "A private Telegram channel invite link is not a chat ID; use its numeric -100... ID."
+                )
+            return f"@{username}"
+    return value
+
+
 def load_settings() -> Settings:
     """Load settings from Replit environment variables or a local .env file."""
     load_dotenv()
@@ -53,7 +68,7 @@ def load_settings() -> Settings:
     return Settings(
         openai_api_key=os.environ["OPENAI_API_KEY"].strip(),
         telegram_bot_token=os.environ["TELEGRAM_BOT_TOKEN"].strip(),
-        telegram_chat_id=os.environ["TELEGRAM_CHAT_ID"].strip(),
+        telegram_chat_id=_normalize_telegram_chat_id(os.environ["TELEGRAM_CHAT_ID"]),
         openai_model=os.getenv("OPENAI_MODEL", "gpt-4o-mini").strip(),
         poll_interval_minutes=_positive_int("POLL_INTERVAL_MINUTES", 15),
         max_articles_per_cycle=_positive_int("MAX_ARTICLES_PER_CYCLE", 3),

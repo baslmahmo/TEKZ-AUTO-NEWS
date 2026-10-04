@@ -56,8 +56,14 @@ class ArabicNewsRewriter:
         except RateLimitError as exc:
             body = exc.body if isinstance(exc.body, dict) else {}
             error = body.get("error", {}) if isinstance(body, dict) else {}
+            details = " ".join((str(exc), str(body), str(error))).lower()
             code = error.get("code") if isinstance(error, dict) else None
-            if code in {"credit_balance_exhausted", "insufficient_quota"}:
+            if (
+                code in {"credit_balance_exhausted", "insufficient_quota"}
+                or "credit_balance_exhausted" in details
+                or "insufficient_quota" in details
+                or "no credits remaining" in details
+            ):
                 raise OpenAICreditsUnavailable(
                     "OpenAI API credits are exhausted. Add API credits to the OpenAI account."
                 ) from exc
