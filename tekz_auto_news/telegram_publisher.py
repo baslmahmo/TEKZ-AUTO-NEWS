@@ -122,6 +122,7 @@ class TelegramPublisher:
         return chat_id
 
     def verify_additional_destination(self) -> int | None:
+        self.additional_destination_chat_id = None
         if not self.additional_chat_id:
             return None
         if self.bot_id is None:
@@ -133,8 +134,12 @@ class TelegramPublisher:
             timeout=self.timeout_seconds,
         )
         chat = self._read_response(response, "Telegram getChat").get("result", {})
-        if chat.get("type") not in {"group", "supergroup"}:
-            raise RuntimeError("The additional Telegram destination must be a group or supergroup.")
+        chat_type = chat.get("type")
+        if chat_type not in {"group", "supergroup", "channel"}:
+            raise RuntimeError(
+                "The additional Telegram username resolved to "
+                f"{chat_type or 'an unknown chat type'}, not a group or channel."
+            )
         chat_id = int(chat["id"])
 
         member_response = self.session.get(
@@ -144,6 +149,18 @@ class TelegramPublisher:
         )
         member = self._read_response(member_response, "Telegram getChatMember").get("result", {})
         status = member.get("status")
+        if chat_type == "channel":
+            if status not in {"administrator", "creator"}:
+                raise TelegramPermissionError(
+                    "The bot must be a channel administrator to publish to the additional destination."
+                )
+            if member.get("can_post_messages") is False:
+                raise TelegramPermissionError(
+                    "The bot does not have permission to post in the additional channel."
+                )
+            self.additional_destination_chat_id = chat_id
+            return chat_id
+
         if status in {"left", "kicked"} or status not in {
             "member",
             "administrator",

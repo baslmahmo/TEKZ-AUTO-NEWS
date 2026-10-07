@@ -247,8 +247,8 @@ def main() -> None:
         except Exception as exc:
             additional_destination_id = None
             logger.warning(
-                "Could not verify additional group %s (%s). The main channel will keep running; "
-                "add @TekzTech_bot to that group with permission to send messages, then restart.",
+                "Could not verify additional destination %s (%s). The main channel will keep running; "
+                "check that @TekzTech_bot has membership and send permission, or channel admin and post permission, then restart.",
                 settings.telegram_additional_chat_id,
                 _safe_error_message(exc, settings),
             )
@@ -259,7 +259,7 @@ def main() -> None:
         )
         if additional_destination_id is not None:
             logger.info(
-                "Additional Telegram group verified; each new story will also be sent there."
+                "Additional Telegram destination verified; each new story will also be sent there."
             )
         if args.test_one_post:
             logger.info("One-post test enabled: the first cycle is limited to one article.")

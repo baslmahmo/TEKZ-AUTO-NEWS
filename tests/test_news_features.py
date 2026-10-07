@@ -225,7 +225,7 @@ class NewsFeatureTests(unittest.TestCase):
         self.assertEqual(message_id, "22")
         self.assertEqual(session.destinations, ["@tekz", -10012345])
 
-    def test_additional_group_must_allow_the_bot_to_send_messages(self) -> None:
+    def test_additional_group_or_channel_checks_posting_permissions(self) -> None:
         class FakeGetResponse:
             ok = True
             status_code = 200
@@ -237,15 +237,16 @@ class NewsFeatureTests(unittest.TestCase):
                 return {"ok": True, "result": self.result}
 
         class MembershipSession:
-            def __init__(self, status: dict) -> None:
+            def __init__(self, status: dict, chat_type: str = "supergroup") -> None:
                 self.status = status
+                self.chat_type = chat_type
 
             def get(self, url: str, *, params: dict, timeout: int) -> FakeGetResponse:
                 if url.endswith("/getChat"):
                     return FakeGetResponse(
                         {
                             "id": -10012345,
-                            "type": "supergroup",
+                            "type": self.chat_type,
                             "permissions": {"can_send_messages": True},
                         }
                     )
@@ -264,6 +265,19 @@ class NewsFeatureTests(unittest.TestCase):
 
         publisher.session = MembershipSession(  # type: ignore[assignment]
             {"status": "restricted", "can_send_messages": False}
+        )
+        with self.assertRaises(TelegramPermissionError):
+            publisher.verify_additional_destination()
+
+        publisher.session = MembershipSession(  # type: ignore[assignment]
+            {"status": "administrator", "can_post_messages": True},
+            "channel",
+        )
+        self.assertEqual(publisher.verify_additional_destination(), -10012345)
+
+        publisher.session = MembershipSession(  # type: ignore[assignment]
+            {"status": "administrator", "can_post_messages": False},
+            "channel",
         )
         with self.assertRaises(TelegramPermissionError):
             publisher.verify_additional_destination()
