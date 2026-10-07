@@ -7,6 +7,7 @@ import time
 from openai import APIConnectionError, APIStatusError, InternalServerError, OpenAI, RateLimitError
 
 from tekz_auto_news.models import ArabicRewrite, NewsArticle
+from tekz_auto_news.writing_styles import BLOG_STORY, STYLE_INSTRUCTIONS
 
 
 class ProviderCreditsUnavailable(RuntimeError):
@@ -68,7 +69,9 @@ class ArabicNewsRewriter:
                     ) from exc
                 raise
 
-    def rewrite(self, article: NewsArticle) -> ArabicRewrite:
+    def rewrite(self, article: NewsArticle, *, preferred_style: str = BLOG_STORY) -> ArabicRewrite:
+        if preferred_style not in STYLE_INSTRUCTIONS:
+            preferred_style = BLOG_STORY
         source_text = article.text or "لم يتوفر ملخص في موجز RSS. استخدم العنوان والرابط فقط، ولا تستنتج تفاصيل إضافية."
         response = self._create_completion(
             model=self.model,
@@ -83,6 +86,9 @@ class ArabicNewsRewriter:
                         "إذا كانت التفاصيل محدودة، اجعل الملخص أقصر ولا تستنتج. "
                         "اكتب عنوانًا قصيرًا وجذابًا بلا تهويل، وسطر افتتاحية قويًا ودقيقًا، "
                         "ثم ملخصًا من فقرتين قصيرتين سهلتي القراءة. "
+                        "اكتب بعربية تحريرية طبيعية، وغيّر بدايات الجمل. تجنب العبارات الآلية والقوالب المتكررة "
+                        "مثل «في عالم التقنية المتسارع» و«في خطوة جديدة». لا تدّعِ تجربة شخصية أو معلومة غير واردة. "
+                        f"{STYLE_INSTRUCTIONS[preferred_style]} "
                         "أضف من 3 إلى 5 وسوم عامة مناسبة للخبر، من دون ادعاء غير وارد في المصدر. "
                         "أعد JSON صالحًا بالمفاتيح title وhook وsummary وhashtags، "
                         "على أن تكون hashtags مصفوفة من النصوص."
@@ -153,4 +159,5 @@ class ArabicNewsRewriter:
             summary=summary[:700],
             hook=hook[:140],
             hashtags=tuple(hashtags[:5]),
+            style=preferred_style,
         )

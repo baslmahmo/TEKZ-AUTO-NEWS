@@ -14,8 +14,15 @@ from tekz_auto_news.config import Settings
 from tekz_auto_news.database import NewsDatabase
 from tekz_auto_news.images import ResolvedImage
 from tekz_auto_news.models import ArabicRewrite, NewsArticle
+from tekz_auto_news.openai_rewriter import ArabicNewsRewriter
 from tekz_auto_news.telegram_controls import TelegramUpdateListener
 from tekz_auto_news.telegram_publisher import TelegramPublisher, _short_caption
+from tekz_auto_news.writing_styles import (
+    APP_EXPLAINER,
+    BLOG_STORY,
+    SOFTWARE_SPOTLIGHT,
+    choose_post_style,
+)
 
 
 def sample_article(number: int = 1) -> NewsArticle:
@@ -57,6 +64,63 @@ class NewsFeatureTests(unittest.TestCase):
         self.assertIn("<b>⚡", caption)
         self.assertNotIn(article.link, caption)
         self.assertNotIn("المصدر:", caption)
+        self.assertTrue(caption.endswith("https://linktr.ee/loversincere29</a>"))
+
+    def test_relevant_post_styles_rotate_without_forcing_an_unrelated_format(self) -> None:
+        app_article = NewsArticle(
+            source_name="Example Feed",
+            category="Apps",
+            title="A new app adds a useful feature",
+            link="https://example.com/app",
+            text="The mobile app is available for Android.",
+            published_at=datetime.now(timezone.utc),
+            image_url=None,
+        )
+        unrelated_article = NewsArticle(
+            source_name="Example Feed",
+            category="AI",
+            title="Researchers publish a new safety study",
+            link="https://example.com/research",
+            text="The study discusses model evaluation.",
+            published_at=datetime.now(timezone.utc),
+            image_url=None,
+        )
+
+        self.assertEqual(choose_post_style(app_article, []), APP_EXPLAINER)
+        self.assertEqual(choose_post_style(app_article, [APP_EXPLAINER]), BLOG_STORY)
+        self.assertEqual(
+            choose_post_style(app_article, [BLOG_STORY, APP_EXPLAINER]),
+            SOFTWARE_SPOTLIGHT,
+        )
+        self.assertEqual(choose_post_style(unrelated_article, [BLOG_STORY]), BLOG_STORY)
+
+    def test_rewriter_uses_requested_editorial_style_and_natural_voice(self) -> None:
+        response = SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(
+                        content=json.dumps(
+                            {
+                                "title": "عنوان",
+                                "hook": "افتتاحية",
+                                "summary": "ملخص موجز.",
+                                "hashtags": ["تقنية", "تطبيقات", "ذكاء_اصطناعي"],
+                            },
+                            ensure_ascii=False,
+                        )
+                    )
+                )
+            ]
+        )
+        rewriter = ArabicNewsRewriter("not-a-real-key", "test-model")
+        rewriter._create_completion = Mock(return_value=response)  # type: ignore[method-assign]
+
+        result = rewriter.rewrite(sample_article(), preferred_style=APP_EXPLAINER)
+
+        self.assertEqual(result.style, APP_EXPLAINER)
+        prompt = rewriter._create_completion.call_args.kwargs["messages"][0]["content"]
+        self.assertIn("شرح عملي لتطبيق", prompt)
+        self.assertIn("تجنب العبارات الآلية", prompt)
 
     def test_long_caption_with_html_characters_stays_under_telegram_limit(self) -> None:
         rewrite = ArabicRewrite(
@@ -154,6 +218,7 @@ class NewsFeatureTests(unittest.TestCase):
                 arabic_hook=rewrite.hook,
                 hashtags=rewrite.hashtags,
                 message_id="22",
+                post_style=SOFTWARE_SPOTLIGHT,
             )
             # A poll update can arrive before the sendPoll response is saved.
             poll["total_voter_count"] = 4
@@ -167,6 +232,7 @@ class NewsFeatureTests(unittest.TestCase):
             self.assertEqual(stats["polls"], 1)
             self.assertEqual(stats["votes"], 4)
             self.assertTrue(database.poll_created_within(24))
+            self.assertEqual(database.recent_post_styles(), [SOFTWARE_SPOTLIGHT])
 
     def test_cycle_claims_at_most_one_article(self) -> None:
         settings = Settings(
@@ -193,6 +259,7 @@ class NewsFeatureTests(unittest.TestCase):
         database.claim.return_value = True
         database.poll_created_within.return_value = True
         database.posted_count.return_value = 1
+        database.recent_post_styles.return_value = []
         rewriter = Mock()
         rewriter.rewrite.return_value = sample_rewrite()
         publisher = Mock()

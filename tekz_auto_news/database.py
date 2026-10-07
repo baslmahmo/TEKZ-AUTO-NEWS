@@ -59,6 +59,7 @@ class NewsDatabase:
                     arabic_summary TEXT,
                     arabic_hook TEXT,
                     hashtags_json TEXT,
+                    post_style TEXT,
                     image_url TEXT,
                     telegram_message_id TEXT,
                     status TEXT NOT NULL DEFAULT 'queued'
@@ -77,6 +78,7 @@ class NewsDatabase:
             for column, definition in (
                 ("arabic_hook", "TEXT"),
                 ("hashtags_json", "TEXT"),
+                ("post_style", "TEXT"),
                 ("telegram_message_id", "TEXT"),
             ):
                 if column not in existing_columns:
@@ -183,13 +185,14 @@ class NewsDatabase:
         arabic_hook: str = "",
         hashtags: tuple[str, ...] = (),
         message_id: str | None = None,
+        post_style: str = "blog_story",
     ) -> None:
         with self._connect() as connection:
             cursor = connection.execute(
                 """
                 UPDATE articles
                 SET status = 'posted', arabic_title = ?, arabic_summary = ?,
-                    arabic_hook = ?, hashtags_json = ?, image_url = ?,
+                    arabic_hook = ?, hashtags_json = ?, post_style = ?, image_url = ?,
                     telegram_message_id = ?, posted_at = ?, last_error = NULL
                 WHERE article_url = ? OR fingerprint = ?
                 """,
@@ -198,6 +201,7 @@ class NewsDatabase:
                     arabic_summary,
                     arabic_hook,
                     json.dumps(hashtags, ensure_ascii=False),
+                    post_style,
                     image_url,
                     message_id,
                     _utc_now().isoformat(),
@@ -231,6 +235,21 @@ class NewsDatabase:
                 "SELECT COUNT(*) AS total FROM articles WHERE status = 'posted'"
             ).fetchone()
         return int(row["total"])
+
+    def recent_post_styles(self, limit: int = 2) -> list[str]:
+        limit = max(1, min(limit, 10))
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT post_style
+                FROM articles
+                WHERE status = 'posted' AND post_style IS NOT NULL
+                ORDER BY posted_at DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return [str(row["post_style"]) for row in rows]
 
     def record_poll(self, article: NewsArticle, poll: dict) -> None:
         poll_id = str(poll.get("id", "")).strip()

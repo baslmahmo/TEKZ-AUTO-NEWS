@@ -18,6 +18,7 @@ from tekz_auto_news.ranking import is_poll_worthy, rank_articles
 from tekz_auto_news.rss_reader import fetch_latest, load_sources
 from tekz_auto_news.telegram_publisher import TelegramPermissionError, TelegramPublisher
 from tekz_auto_news.telegram_controls import TelegramUpdateListener
+from tekz_auto_news.writing_styles import choose_post_style
 
 logger = logging.getLogger("tekz_auto_news")
 _running = True
@@ -119,7 +120,8 @@ def _publish_cycle(
 
         attempted += 1
         try:
-            rewrite = rewriter.rewrite(article)
+            post_style = choose_post_style(article, database.recent_post_styles(limit=2))
+            rewrite = rewriter.rewrite(article, preferred_style=post_style)
             image = image_resolver.resolve(article)
             message_id = publisher.publish_photo(article, rewrite, image)
             database.mark_posted(
@@ -130,6 +132,7 @@ def _publish_cycle(
                 arabic_hook=rewrite.hook,
                 hashtags=rewrite.hashtags,
                 message_id=message_id,
+                post_style=rewrite.style,
             )
             published += 1
             logger.info(

@@ -21,3 +21,4 @@ class ArabicRewrite:
     summary: str
     hook: str = ""
     hashtags: tuple[str, ...] = ()
+    style: str = "blog_story"

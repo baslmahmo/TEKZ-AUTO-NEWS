@@ -35,7 +35,7 @@ def _short_caption(_article: NewsArticle, rewrite: ArabicRewrite) -> str:
             parts.append(f"<b>⚡ {hook}</b>")
         if summary_text:
             parts.append(summary_text)
-        parts.extend((link_line, FOLLOW_TEXT, hashtags))
+        parts.extend((FOLLOW_TEXT, hashtags, link_line))
         return "\n\n".join(parts)
 
     caption = compose(summary)
