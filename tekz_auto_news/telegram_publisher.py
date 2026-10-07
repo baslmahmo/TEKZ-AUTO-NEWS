@@ -43,14 +43,23 @@ def _short_caption(_article: NewsArticle, rewrite: ArabicRewrite) -> str:
         return caption
 
     fixed = compose("")
-    available = TELEGRAM_CAPTION_LIMIT - len(fixed) - 5
-    if available < 0:
+    if len(fixed) > TELEGRAM_CAPTION_LIMIT:
         raise ValueError("The title and follow links exceed Telegram's photo caption limit.")
-    shortened = rewrite.summary[:available].rsplit(" ", 1)[0].rstrip()
-    caption = compose(html.escape(shortened + ("…" if shortened else ""), quote=False))
-    if len(caption) > TELEGRAM_CAPTION_LIMIT:
-        raise ValueError("The generated caption exceeds Telegram's photo caption limit.")
-    return caption
+
+    low, high = 0, len(rewrite.summary)
+    best = fixed
+    while low <= high:
+        midpoint = (low + high) // 2
+        shortened = rewrite.summary[:midpoint].rstrip()
+        if midpoint < len(rewrite.summary) and shortened:
+            shortened += "…"
+        candidate = compose(html.escape(shortened, quote=False))
+        if len(candidate) <= TELEGRAM_CAPTION_LIMIT:
+            best = candidate
+            low = midpoint + 1
+        else:
+            high = midpoint - 1
+    return best
 
 
 class TelegramPublisher:

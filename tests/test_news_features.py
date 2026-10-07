@@ -9,7 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 from urllib.parse import parse_qs, urlparse
 
-from tekz_auto_news.bot import _publish_cycle
+from tekz_auto_news.bot import _publish_cycle, _safe_error_message
 from tekz_auto_news.config import Settings
 from tekz_auto_news.database import NewsDatabase
 from tekz_auto_news.images import ResolvedImage
@@ -57,6 +57,50 @@ class NewsFeatureTests(unittest.TestCase):
         self.assertIn("<b>⚡", caption)
         self.assertNotIn(article.link, caption)
         self.assertNotIn("المصدر:", caption)
+
+    def test_long_caption_with_html_characters_stays_under_telegram_limit(self) -> None:
+        rewrite = ArabicRewrite(
+            title="عنوان",
+            summary="&<>" * 1500,
+            hook="افتتاحية",
+            hashtags=("تقنية", "ذكاء_اصطناعي", "أخبار_التقنية"),
+        )
+
+        caption = _short_caption(sample_article(), rewrite)
+
+        self.assertLessEqual(len(caption), 1024)
+        self.assertIn("&amp;", caption)
+        self.assertNotIn("&<>", caption)
+
+    def test_error_logs_redact_provider_and_telegram_credentials(self) -> None:
+        settings = Settings(
+            openrouter_api_key="openrouter-secret",
+            telegram_bot_token="123456:telegram-secret",
+            telegram_chat_id="@test",
+            telegram_channel_url="https://t.me/channel",
+            telegram_group_url="https://t.me/group",
+            openrouter_model="openai/gpt-4o-mini",
+            poll_interval_minutes=15,
+            max_articles_per_cycle=1,
+            max_article_age_hours=72,
+            fetch_timeout_seconds=20,
+            publish_timezone="UTC",
+            publish_start_hour=0,
+            publish_end_hour=23,
+            database_path=Path(":memory:"),
+            sources_path=Path("rss_sources.json"),
+            log_level="INFO",
+        )
+        error = RuntimeError(
+            "request https://api.telegram.org/bot123456:telegram-secret/sendPhoto "
+            "failed with key openrouter-secret"
+        )
+
+        safe_message = _safe_error_message(error, settings)
+
+        self.assertNotIn(settings.telegram_bot_token, safe_message)
+        self.assertNotIn(settings.openrouter_api_key, safe_message)
+        self.assertEqual(safe_message.count("[redacted]"), 2)
 
     def test_inline_keyboard_has_subscribe_share_and_discuss_links(self) -> None:
         class CapturingSession:
@@ -111,9 +155,11 @@ class NewsFeatureTests(unittest.TestCase):
                 hashtags=rewrite.hashtags,
                 message_id="22",
             )
-            database.record_poll(article, poll)
+            # A poll update can arrive before the sendPoll response is saved.
             poll["total_voter_count"] = 4
             database.update_poll(poll)
+            poll["total_voter_count"] = 3
+            database.record_poll(article, poll)
 
             stats = database.stats()
             self.assertEqual(stats["posted"], 1)

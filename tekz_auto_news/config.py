@@ -93,7 +93,7 @@ def load_settings() -> Settings:
         names = ", ".join(missing)
         raise ValueError(
             f"Missing required environment variables: {names}. "
-            "Set API keys in Replit Secrets and TELEGRAM_CHAT_ID in environment variables."
+            "Set API keys and Telegram button URLs in Replit Secrets, and TELEGRAM_CHAT_ID in environment variables."
         )
 
     log_level = os.getenv("LOG_LEVEL", "INFO").strip().upper()

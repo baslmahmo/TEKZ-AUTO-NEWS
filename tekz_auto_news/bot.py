@@ -44,6 +44,14 @@ def _inside_publish_window(settings: Settings) -> bool:
     return local_now.hour >= start or local_now.hour < end
 
 
+def _safe_error_message(exc: Exception, settings: Settings) -> str:
+    message = str(exc)
+    for secret in (settings.telegram_bot_token, settings.openrouter_api_key):
+        if secret:
+            message = message.replace(secret, "[redacted]")
+    return f"{type(exc).__name__}: {message}"[:800]
+
+
 def _publish_cycle(
     settings: Settings,
     database: NewsDatabase,
@@ -140,33 +148,36 @@ def _publish_cycle(
                 except Exception as exc:
                     logger.warning("Could not create an optional Telegram poll (%s).", type(exc).__name__)
         except ProviderCreditsUnavailable as exc:
+            safe_error = _safe_error_message(exc, settings)
             try:
-                database.mark_failed(article, str(exc))
+                database.mark_failed(article, safe_error)
             except Exception:
                 logger.exception("Could not save the failed status for an article.")
             _openrouter_retry_after = datetime.now(timezone.utc) + timedelta(hours=6)
             logger.error(
                 "%s OpenRouter requests will pause for six hours; add credits and restart the workflow to resume sooner.",
-                exc,
+                safe_error,
             )
             break
         except TelegramPermissionError as exc:
+            safe_error = _safe_error_message(exc, settings)
             try:
-                database.mark_failed(article, str(exc))
+                database.mark_failed(article, safe_error)
             except Exception:
                 logger.exception("Could not save the failed status for an article.")
             _telegram_paused = True
             logger.error(
                 "%s Grant the bot permission to post in the channel, then restart the workflow.",
-                exc,
+                safe_error,
             )
             break
         except Exception as exc:
+            safe_error = _safe_error_message(exc, settings)
             try:
-                database.mark_failed(article, f"{type(exc).__name__}: {exc}")
+                database.mark_failed(article, safe_error)
             except Exception:
                 logger.exception("Could not save the failed status for an article.")
-            logger.exception("Could not publish article from %s: %s", article.source_name, exc)
+            logger.error("Could not publish article from %s: %s", article.source_name, safe_error)
 
     if first_scan_backlog:
         database.mark_initial_backlog_skipped(first_scan_backlog)
@@ -202,7 +213,7 @@ def main() -> None:
         settings = load_settings()
     except Exception as exc:
         print(f"Configuration error: {exc}", file=sys.stderr)
-        raise SystemExit(1) from exc
+        raise SystemExit(1) from None
 
     logging.basicConfig(
         level=getattr(logging, settings.log_level),
@@ -235,8 +246,8 @@ def main() -> None:
         if args.test_one_post:
             logger.info("One-post test enabled: the first cycle is limited to one article.")
     except Exception as exc:
-        logger.error("Could not verify Telegram bot access: %s", exc)
-        raise SystemExit(1) from exc
+        logger.error("Could not verify Telegram bot access: %s", _safe_error_message(exc, settings))
+        raise SystemExit(1) from None
 
     listener_stop = threading.Event()
     listener = TelegramUpdateListener(

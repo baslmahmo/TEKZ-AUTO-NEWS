@@ -242,11 +242,28 @@ class NewsDatabase:
         with self._connect() as connection:
             connection.execute(
                 """
-                INSERT OR REPLACE INTO polls (
+                INSERT INTO polls (
                     poll_id, article_url, question, options_json,
                     total_voter_count, results_json, created_at, updated_at
                 )
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(poll_id) DO UPDATE SET
+                    article_url = CASE
+                        WHEN excluded.article_url <> '' THEN excluded.article_url
+                        ELSE polls.article_url
+                    END,
+                    question = excluded.question,
+                    options_json = CASE
+                        WHEN polls.total_voter_count > excluded.total_voter_count
+                        THEN polls.options_json ELSE excluded.options_json
+                    END,
+                    total_voter_count = MAX(polls.total_voter_count, excluded.total_voter_count),
+                    results_json = CASE
+                        WHEN polls.total_voter_count > excluded.total_voter_count
+                        THEN polls.results_json ELSE excluded.results_json
+                    END,
+                    created_at = MIN(polls.created_at, excluded.created_at),
+                    updated_at = MAX(polls.updated_at, excluded.updated_at)
                 """,
                 (
                     poll_id,
@@ -264,20 +281,30 @@ class NewsDatabase:
         poll_id = str(poll.get("id", "")).strip()
         if not poll_id:
             return
+        now = _utc_now().isoformat()
         with self._connect() as connection:
             connection.execute(
                 """
-                UPDATE polls
-                SET options_json = ?, total_voter_count = ?,
-                    results_json = ?, updated_at = ?
-                WHERE poll_id = ?
+                INSERT INTO polls (
+                    poll_id, article_url, question, options_json,
+                    total_voter_count, results_json, created_at, updated_at
+                )
+                VALUES (?, '', ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(poll_id) DO UPDATE SET
+                    question = excluded.question,
+                    options_json = excluded.options_json,
+                    total_voter_count = excluded.total_voter_count,
+                    results_json = excluded.results_json,
+                    updated_at = excluded.updated_at
                 """,
                 (
+                    poll_id,
+                    str(poll.get("question", "")),
                     json.dumps(poll.get("options", []), ensure_ascii=False),
                     int(poll.get("total_voter_count", 0)),
                     json.dumps(poll, ensure_ascii=False),
-                    _utc_now().isoformat(),
-                    poll_id,
+                    now,
+                    now,
                 ),
             )
 
