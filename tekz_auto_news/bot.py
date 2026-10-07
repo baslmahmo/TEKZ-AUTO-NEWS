@@ -235,17 +235,32 @@ def main() -> None:
         settings.telegram_channel_url,
         settings.telegram_group_url,
         settings.fetch_timeout_seconds,
+        settings.telegram_additional_chat_id,
     )
     image_resolver = ImageResolver(settings.fetch_timeout_seconds)
 
     try:
         bot_username = publisher.verify_connection()
         destination_chat_id = publisher.verify_destination()
+        try:
+            additional_destination_id = publisher.verify_additional_destination()
+        except Exception as exc:
+            additional_destination_id = None
+            logger.warning(
+                "Could not verify additional group %s (%s). The main channel will keep running; "
+                "add @TekzTech_bot to that group with permission to send messages, then restart.",
+                settings.telegram_additional_chat_id,
+                _safe_error_message(exc, settings),
+            )
         logger.info(
             "TEKZ-AUTO-NEWS is running as @%s; Telegram destination verified. Checking feeds every %s minutes; maximum one story per cycle.",
             bot_username,
             settings.poll_interval_minutes,
         )
+        if additional_destination_id is not None:
+            logger.info(
+                "Additional Telegram group verified; each new story will also be sent there."
+            )
         if args.test_one_post:
             logger.info("One-post test enabled: the first cycle is limited to one article.")
     except Exception as exc:

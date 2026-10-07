@@ -10,13 +10,17 @@ from unittest.mock import Mock, patch
 from urllib.parse import parse_qs, urlparse
 
 from tekz_auto_news.bot import _publish_cycle, _safe_error_message
-from tekz_auto_news.config import Settings
+from tekz_auto_news.config import Settings, _normalize_telegram_chat_id
 from tekz_auto_news.database import NewsDatabase
 from tekz_auto_news.images import ResolvedImage
 from tekz_auto_news.models import ArabicRewrite, NewsArticle
 from tekz_auto_news.openai_rewriter import ArabicNewsRewriter
 from tekz_auto_news.telegram_controls import TelegramUpdateListener
-from tekz_auto_news.telegram_publisher import TelegramPublisher, _short_caption
+from tekz_auto_news.telegram_publisher import (
+    TelegramPermissionError,
+    TelegramPublisher,
+    _short_caption,
+)
 from tekz_auto_news.writing_styles import (
     APP_EXPLAINER,
     BLOG_STORY,
@@ -194,6 +198,75 @@ class NewsFeatureTests(unittest.TestCase):
         share = parse_qs(urlparse(buttons["📤 مشاركة الخبر"]).query)
         self.assertEqual(share["url"], [article.link])
         self.assertEqual(share["text"], [sample_rewrite().title])
+
+    def test_public_group_link_normalizes_and_post_is_sent_to_both_destinations(self) -> None:
+        class CapturingSession:
+            destinations: list[str | int] = []
+
+            def post(self, _url: str, *, data: dict, files: dict, timeout: int) -> FakeTelegramResponse:
+                self.destinations.append(data["chat_id"])
+                return FakeTelegramResponse()
+
+        self.assertEqual(_normalize_telegram_chat_id("https://t.me/baslmahmod"), "@baslmahmod")
+        session = CapturingSession()
+        publisher = TelegramPublisher(
+            "test-token",
+            "@tekz",
+            "https://t.me/tekz",
+            "https://t.me/discussion",
+            additional_chat_id="@baslmahmod",
+        )
+        publisher.session = session  # type: ignore[assignment]
+        publisher.additional_destination_chat_id = -10012345
+        image = ResolvedImage(b"image", "news.png", "image/png", "https://example.com/image.png")
+
+        message_id = publisher.publish_photo(sample_article(), sample_rewrite(), image)
+
+        self.assertEqual(message_id, "22")
+        self.assertEqual(session.destinations, ["@tekz", -10012345])
+
+    def test_additional_group_must_allow_the_bot_to_send_messages(self) -> None:
+        class FakeGetResponse:
+            ok = True
+            status_code = 200
+
+            def __init__(self, result: dict) -> None:
+                self.result = result
+
+            def json(self) -> dict:
+                return {"ok": True, "result": self.result}
+
+        class MembershipSession:
+            def __init__(self, status: dict) -> None:
+                self.status = status
+
+            def get(self, url: str, *, params: dict, timeout: int) -> FakeGetResponse:
+                if url.endswith("/getChat"):
+                    return FakeGetResponse(
+                        {
+                            "id": -10012345,
+                            "type": "supergroup",
+                            "permissions": {"can_send_messages": True},
+                        }
+                    )
+                return FakeGetResponse(self.status)
+
+        publisher = TelegramPublisher(
+            "test-token",
+            "@tekz",
+            "https://t.me/tekz",
+            "https://t.me/discussion",
+            additional_chat_id="@baslmahmod",
+        )
+        publisher.bot_id = 77
+        publisher.session = MembershipSession({"status": "member"})  # type: ignore[assignment]
+        self.assertEqual(publisher.verify_additional_destination(), -10012345)
+
+        publisher.session = MembershipSession(  # type: ignore[assignment]
+            {"status": "restricted", "can_send_messages": False}
+        )
+        with self.assertRaises(TelegramPermissionError):
+            publisher.verify_additional_destination()
 
     def test_database_keeps_post_attempt_and_poll_results(self) -> None:
         article = sample_article()

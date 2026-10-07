@@ -27,6 +27,7 @@ class Settings:
     database_path: Path
     sources_path: Path
     log_level: str
+    telegram_additional_chat_id: str | None = None
 
 
 def _positive_int(name: str, default: int, *, minimum: int = 1) -> int:
@@ -106,6 +107,7 @@ def load_settings() -> Settings:
     except ZoneInfoNotFoundError as exc:
         raise ValueError("PUBLISH_TIMEZONE must be a valid IANA timezone name.") from exc
 
+    additional_chat_id = os.getenv("TELEGRAM_ADDITIONAL_CHAT_ID", "@baslmahmod").strip()
     return Settings(
         openrouter_api_key=os.environ["OPENROUTER_API_KEY"].strip(),
         telegram_bot_token=os.environ["TELEGRAM_BOT_TOKEN"].strip(),
@@ -123,4 +125,7 @@ def load_settings() -> Settings:
         database_path=Path(os.getenv("DATABASE_PATH", "data/tekz_auto_news.db")),
         sources_path=Path(os.getenv("RSS_SOURCES_PATH", "rss_sources.json")),
         log_level=log_level,
+        telegram_additional_chat_id=(
+            _normalize_telegram_chat_id(additional_chat_id) if additional_chat_id else None
+        ),
     )

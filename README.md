@@ -41,6 +41,7 @@
 | `TELEGRAM_CHANNEL_URL` | نعم، في Secrets | — |
 | `TELEGRAM_GROUP_URL` | نعم، في Secrets | — |
 | `TELEGRAM_CHAT_ID` | نعم | — |
+| `TELEGRAM_ADDITIONAL_CHAT_ID` | لا؛ يجب أن يكون البوت عضوًا في المجموعة مع صلاحية الإرسال | `@baslmahmod` |
 | `OPENROUTER_MODEL` | لا | `openai/gpt-4o-mini` |
 | `POLL_INTERVAL_MINUTES` | لا | `15` |
 | `MAX_ARTICLE_AGE_HOURS` | لا | `72` |

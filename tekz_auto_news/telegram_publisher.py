@@ -70,15 +70,18 @@ class TelegramPublisher:
         channel_url: str,
         group_url: str,
         timeout_seconds: int = 30,
+        additional_chat_id: str | None = None,
     ) -> None:
         self.base_url = f"https://api.telegram.org/bot{bot_token}"
         self.chat_id = chat_id
         self.channel_url = channel_url
         self.group_url = group_url
         self.timeout_seconds = timeout_seconds
+        self.additional_chat_id = additional_chat_id
         self.session = requests.Session()
         self.bot_id: int | None = None
         self.destination_chat_id: int | None = None
+        self.additional_destination_chat_id: int | None = None
 
     def verify_connection(self) -> str:
         response = self.session.get(f"{self.base_url}/getMe", timeout=self.timeout_seconds)
@@ -118,6 +121,53 @@ class TelegramPublisher:
         self.destination_chat_id = chat_id
         return chat_id
 
+    def verify_additional_destination(self) -> int | None:
+        if not self.additional_chat_id:
+            return None
+        if self.bot_id is None:
+            self.verify_connection()
+
+        response = self.session.get(
+            f"{self.base_url}/getChat",
+            params={"chat_id": self.additional_chat_id},
+            timeout=self.timeout_seconds,
+        )
+        chat = self._read_response(response, "Telegram getChat").get("result", {})
+        if chat.get("type") not in {"group", "supergroup"}:
+            raise RuntimeError("The additional Telegram destination must be a group or supergroup.")
+        chat_id = int(chat["id"])
+
+        member_response = self.session.get(
+            f"{self.base_url}/getChatMember",
+            params={"chat_id": chat_id, "user_id": self.bot_id},
+            timeout=self.timeout_seconds,
+        )
+        member = self._read_response(member_response, "Telegram getChatMember").get("result", {})
+        status = member.get("status")
+        if status in {"left", "kicked"} or status not in {
+            "member",
+            "administrator",
+            "creator",
+            "restricted",
+        }:
+            raise TelegramPermissionError(
+                "Add the bot to the additional Telegram group and allow it to send messages."
+            )
+        if status == "restricted" and member.get("can_send_messages") is False:
+            raise TelegramPermissionError(
+                "The bot is in the additional Telegram group but cannot send messages."
+            )
+        if (
+            status == "member"
+            and (chat.get("permissions") or {}).get("can_send_messages") is False
+        ):
+            raise TelegramPermissionError(
+                "Group permissions currently prevent the bot from sending messages."
+            )
+
+        self.additional_destination_chat_id = chat_id
+        return chat_id
+
     def publish_photo(
         self,
         article: NewsArticle,
@@ -137,10 +187,45 @@ class TelegramPublisher:
                 [{"text": "💬 ناقش الخبر", "url": self.group_url}],
             ]
         }
+        message_id = self._send_photo(
+            self.chat_id,
+            caption,
+            reply_markup,
+            image,
+        )
+        if self.additional_destination_chat_id is not None:
+            try:
+                group_message_id = self._send_photo(
+                    self.additional_destination_chat_id,
+                    caption,
+                    reply_markup,
+                    image,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Could not publish the story to the additional Telegram group (%s).",
+                    type(exc).__name__,
+                )
+                if isinstance(exc, TelegramPermissionError):
+                    self.additional_destination_chat_id = None
+            else:
+                logger.info(
+                    "Published story copy to the additional Telegram group (message id %s).",
+                    group_message_id,
+                )
+        return message_id
+
+    def _send_photo(
+        self,
+        chat_id: int | str,
+        caption: str,
+        reply_markup: dict,
+        image: ResolvedImage,
+    ) -> str:
         response = self.session.post(
             f"{self.base_url}/sendPhoto",
             data={
-                "chat_id": self.chat_id,
+                "chat_id": chat_id,
                 "caption": caption,
                 "parse_mode": "HTML",
                 "reply_markup": json.dumps(reply_markup, ensure_ascii=False),
