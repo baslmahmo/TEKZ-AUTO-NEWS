@@ -4,20 +4,25 @@ import argparse
 import logging
 import signal
 import sys
+import threading
 import time
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from tekz_auto_news.config import Settings, load_settings
 from tekz_auto_news.database import NewsDatabase
 from tekz_auto_news.images import ImageResolver
 from tekz_auto_news.models import NewsArticle
 from tekz_auto_news.openai_rewriter import ArabicNewsRewriter, ProviderCreditsUnavailable
+from tekz_auto_news.ranking import is_poll_worthy, rank_articles
 from tekz_auto_news.rss_reader import fetch_latest, load_sources
 from tekz_auto_news.telegram_publisher import TelegramPermissionError, TelegramPublisher
+from tekz_auto_news.telegram_controls import TelegramUpdateListener
 
 logger = logging.getLogger("tekz_auto_news")
 _running = True
-_openai_retry_after: datetime | None = None
+_wake_event = threading.Event()
+_openrouter_retry_after: datetime | None = None
 _telegram_paused = False
 
 
@@ -25,6 +30,18 @@ def _handle_shutdown(signum: int, _frame: object) -> None:
     global _running
     logger.info("Received shutdown signal %s; finishing the current operation.", signum)
     _running = False
+    _wake_event.set()
+
+
+def _inside_publish_window(settings: Settings) -> bool:
+    local_now = datetime.now(ZoneInfo(settings.publish_timezone))
+    start = settings.publish_start_hour
+    end = settings.publish_end_hour
+    if start == end:
+        return True
+    if start < end:
+        return start <= local_now.hour < end
+    return local_now.hour >= start or local_now.hour < end
 
 
 def _publish_cycle(
@@ -35,29 +52,41 @@ def _publish_cycle(
     image_resolver: ImageResolver,
     *,
     max_articles_per_cycle: int | None = None,
+    force: bool = False,
 ) -> int:
-    global _openai_retry_after, _telegram_paused
+    global _openrouter_retry_after, _telegram_paused
     if _telegram_paused:
         logger.warning(
             "Telegram publishing is paused after a permission error; grant channel posting rights and restart the workflow."
         )
         return 0
 
-    now = datetime.now(timezone.utc)
-    if _openai_retry_after and now < _openai_retry_after:
-        logger.warning(
-            "OpenRouter requests are paused after an exhausted credit balance; retry after %s.",
-            _openai_retry_after.isoformat(timespec="minutes"),
+    if not force and not _inside_publish_window(settings):
+        logger.info(
+            "Outside the configured publishing window (%02d:00-%02d:00 %s); skipping this cycle.",
+            settings.publish_start_hour,
+            settings.publish_end_hour,
+            settings.publish_timezone,
         )
         return 0
-    _openai_retry_after = None
+
+    now = datetime.now(timezone.utc)
+    if _openrouter_retry_after and now < _openrouter_retry_after:
+        logger.warning(
+            "OpenRouter requests are paused after an exhausted credit balance; retry after %s.",
+            _openrouter_retry_after.isoformat(timespec="minutes"),
+        )
+        return 0
+    _openrouter_retry_after = None
 
     sources = load_sources(settings.sources_path)
     cycle_limit = max_articles_per_cycle or settings.max_articles_per_cycle
-    articles = fetch_latest(
-        sources,
-        timeout_seconds=settings.fetch_timeout_seconds,
-        max_age_hours=settings.max_article_age_hours,
+    articles = rank_articles(
+        fetch_latest(
+            sources,
+            timeout_seconds=settings.fetch_timeout_seconds,
+            max_age_hours=settings.max_article_age_hours,
+        )
     )
     logger.info("Collected %s recent stories from %s RSS feeds.", len(articles), len(sources))
 
@@ -85,19 +114,37 @@ def _publish_cycle(
             rewrite = rewriter.rewrite(article)
             image = image_resolver.resolve(article)
             message_id = publisher.publish_photo(article, rewrite, image)
-            database.mark_posted(article, rewrite.title, rewrite.summary, image.url)
+            database.mark_posted(
+                article,
+                rewrite.title,
+                rewrite.summary,
+                image.url,
+                arabic_hook=rewrite.hook,
+                hashtags=rewrite.hashtags,
+                message_id=message_id,
+            )
             published += 1
             logger.info(
                 "Published article from %s to Telegram (message id %s).",
                 article.source_name,
                 message_id,
             )
+            if is_poll_worthy(article) and not database.poll_created_within(24):
+                try:
+                    poll = publisher.send_poll(
+                        "هل تتوقع أن ينجح هذا المنتج؟",
+                        ("نعم، على الأرجح", "لا، يحتاج إلى تطوير", "من المبكر الحكم"),
+                    )
+                    database.record_poll(article, poll)
+                    logger.info("Created a Telegram poll for a product announcement.")
+                except Exception as exc:
+                    logger.warning("Could not create an optional Telegram poll (%s).", type(exc).__name__)
         except ProviderCreditsUnavailable as exc:
             try:
                 database.mark_failed(article, str(exc))
             except Exception:
                 logger.exception("Could not save the failed status for an article.")
-            _openai_retry_after = datetime.now(timezone.utc) + timedelta(hours=6)
+            _openrouter_retry_after = datetime.now(timezone.utc) + timedelta(hours=6)
             logger.error(
                 "%s OpenRouter requests will pause for six hours; add credits and restart the workflow to resume sooner.",
                 exc,
@@ -134,14 +181,22 @@ def _publish_cycle(
 
 
 def main() -> None:
-    global _running
+    global _running, _telegram_paused, _openrouter_retry_after
     parser = argparse.ArgumentParser(description="Run the TEKZ-AUTO-NEWS Telegram bot.")
     parser.add_argument(
         "--test-one-post",
         action="store_true",
         help="Limit the first publishing cycle to one article, then resume normal limits.",
     )
+    parser.add_argument(
+        "--defer-first-cycle",
+        action="store_true",
+        help="Wait for the normal interval before the first news scan.",
+    )
     args = parser.parse_args()
+    _running = True
+    _telegram_paused = False
+    _openrouter_retry_after = None
 
     try:
         settings = load_settings()
@@ -160,13 +215,20 @@ def main() -> None:
 
     database = NewsDatabase(settings.database_path)
     rewriter = ArabicNewsRewriter(settings.openrouter_api_key, settings.openrouter_model)
-    publisher = TelegramPublisher(settings.telegram_bot_token, settings.telegram_chat_id)
+    publisher = TelegramPublisher(
+        settings.telegram_bot_token,
+        settings.telegram_chat_id,
+        settings.telegram_channel_url,
+        settings.telegram_group_url,
+        settings.fetch_timeout_seconds,
+    )
     image_resolver = ImageResolver(settings.fetch_timeout_seconds)
 
     try:
         bot_username = publisher.verify_connection()
+        destination_chat_id = publisher.verify_destination()
         logger.info(
-            "TEKZ-AUTO-NEWS is running as @%s; checking feeds every %s minutes.",
+            "TEKZ-AUTO-NEWS is running as @%s; Telegram destination verified. Checking feeds every %s minutes; maximum one story per cycle.",
             bot_username,
             settings.poll_interval_minutes,
         )
@@ -176,30 +238,56 @@ def main() -> None:
         logger.error("Could not verify Telegram bot access: %s", exc)
         raise SystemExit(1) from exc
 
-    first_cycle = True
-    while _running:
-        cycle_started = time.monotonic()
-        try:
-            _publish_cycle(
-                settings,
-                database,
-                rewriter,
-                publisher,
-                image_resolver,
-                max_articles_per_cycle=1 if args.test_one_post and first_cycle else None,
-            )
-        except Exception:
-            logger.exception("The news scan failed; the bot will retry at the next interval.")
-        first_cycle = False
+    listener_stop = threading.Event()
+    listener = TelegramUpdateListener(
+        publisher,
+        database,
+        destination_chat_id,
+        _wake_event,
+        listener_stop,
+        lambda: (
+            "متوقف مؤقتًا بسبب صلاحيات Telegram"
+            if _telegram_paused
+            else "متوقف مؤقتًا بسبب رصيد OpenRouter"
+            if _openrouter_retry_after and datetime.now(timezone.utc) < _openrouter_retry_after
+            else "يعمل"
+        ),
+    )
+    listener.start()
 
-        remaining = max(
-            0,
-            settings.poll_interval_minutes * 60 - (time.monotonic() - cycle_started),
+    interval_seconds = settings.poll_interval_minutes * 60
+    next_run_at = time.monotonic() + (interval_seconds if args.defer_first_cycle else 0)
+    if args.defer_first_cycle:
+        logger.info(
+            "Initial news scan deferred for %s minutes; scheduled cycles remain limited to one story.",
+            settings.poll_interval_minutes,
         )
-        while _running and remaining > 0:
-            sleep_for = min(1.0, remaining)
-            time.sleep(sleep_for)
-            remaining -= sleep_for
+    first_cycle = True
+    try:
+        while _running:
+            delay = max(0.0, next_run_at - time.monotonic())
+            forced = _wake_event.wait(timeout=delay)
+            _wake_event.clear()
+            if not _running:
+                break
+            try:
+                _publish_cycle(
+                    settings,
+                    database,
+                    rewriter,
+                    publisher,
+                    image_resolver,
+                    max_articles_per_cycle=1 if args.test_one_post and first_cycle else None,
+                    force=forced,
+                )
+            except Exception:
+                logger.exception("The news scan failed; the bot will retry at the next interval.")
+            first_cycle = False
+            next_run_at = time.monotonic() + interval_seconds
+    finally:
+        listener_stop.set()
+        _wake_event.set()
+        listener.join(timeout=2)
 
     logger.info("TEKZ-AUTO-NEWS stopped cleanly.")
 

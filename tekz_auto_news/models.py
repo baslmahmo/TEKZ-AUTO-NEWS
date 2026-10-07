@@ -19,3 +19,5 @@ class NewsArticle:
 class ArabicRewrite:
     title: str
     summary: str
+    hook: str = ""
+    hashtags: tuple[str, ...] = ()

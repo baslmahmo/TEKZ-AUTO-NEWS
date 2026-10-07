@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 
 from openai import APIConnectionError, APIStatusError, InternalServerError, OpenAI, RateLimitError
@@ -80,8 +81,11 @@ class ArabicNewsRewriter:
                         "أنت محرر أخبار تقنية باللغة العربية. أعد صياغة المعلومات الواردة فقط، "
                         "ولا تضف أرقامًا أو أسماء أو اقتباسات أو أسبابًا غير موجودة في المصدر. "
                         "إذا كانت التفاصيل محدودة، اجعل الملخص أقصر ولا تستنتج. "
-                        "اكتب عنوانًا عربيًا واضحًا وملخصًا مهنيًا من 50 إلى 90 كلمة. "
-                        "أعد JSON صالحًا بالمفتاحين title وsummary فقط."
+                        "اكتب عنوانًا قصيرًا وجذابًا بلا تهويل، وسطر افتتاحية قويًا ودقيقًا، "
+                        "ثم ملخصًا من فقرتين قصيرتين سهلتي القراءة. "
+                        "أضف من 3 إلى 5 وسوم عامة مناسبة للخبر، من دون ادعاء غير وارد في المصدر. "
+                        "أعد JSON صالحًا بالمفاتيح title وhook وsummary وhashtags، "
+                        "على أن تكون hashtags مصفوفة من النصوص."
                     ),
                 },
                 {
@@ -111,9 +115,42 @@ class ArabicNewsRewriter:
             payload = json.loads(content)
             title = str(payload["title"]).strip()
             summary = str(payload["summary"]).strip()
+            hook = str(payload.get("hook", "")).strip()
+            raw_hashtags = payload.get("hashtags", [])
         except (json.JSONDecodeError, KeyError, TypeError) as exc:
             raise RuntimeError("OpenRouter returned a response that did not match the expected JSON format.") from exc
 
         if not title or not summary:
             raise RuntimeError("OpenRouter returned an empty title or summary.")
-        return ArabicRewrite(title=title[:180], summary=summary[:850])
+        if isinstance(raw_hashtags, str):
+            raw_hashtags = raw_hashtags.split()
+        if not isinstance(raw_hashtags, list):
+            raw_hashtags = []
+
+        hashtags: list[str] = []
+        for item in raw_hashtags:
+            tag = re.sub(r"[^A-Za-z0-9_\u0600-\u06FF]", "", str(item).strip().lstrip("#"))
+            if tag and tag not in hashtags:
+                hashtags.append(tag)
+            if len(hashtags) == 5:
+                break
+
+        fallback_tags = (
+            ["تقنية", "ذكاء_اصطناعي", "أخبار_التقنية"]
+            if "ai" in article.category.lower() or "ذكاء" in article.category
+            else ["تقنية", "ذكاء_اصطناعي", "ابتكار"]
+        )
+        for tag in fallback_tags:
+            if len(hashtags) >= 3:
+                break
+            if tag not in hashtags:
+                hashtags.append(tag)
+
+        if not hook:
+            hook = summary.split("\n", 1)[0].strip()[:140]
+        return ArabicRewrite(
+            title=title[:180],
+            summary=summary[:700],
+            hook=hook[:140],
+            hashtags=tuple(hashtags[:5]),
+        )
