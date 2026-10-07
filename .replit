@@ -29,7 +29,7 @@ outputType = "console"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "python main.py --test-one-post --defer-first-cycle"
+args = "python main.py --test-one-post"
 
 [agent]
 stack = "PNPM_WORKSPACE"
