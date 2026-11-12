@@ -123,7 +123,20 @@ def _publish_cycle(
             post_style = choose_post_style(article, database.recent_post_styles(limit=2))
             rewrite = rewriter.rewrite(article, preferred_style=post_style)
             image = image_resolver.resolve(article)
-            message_id = publisher.publish_photo(article, rewrite, image)
+            try:
+                message_id = publisher.publish_photo(article, rewrite, image)
+            except RuntimeError as exc:
+                if "PHOTO_INVALID_DIMENSIONS" not in str(exc):
+                    raise
+                fallback_image = image_resolver.resolve_fallback(article)
+                if fallback_image.url == image.url:
+                    raise
+                logger.warning(
+                    "Telegram rejected the source image dimensions for %s; retrying with a standard fallback.",
+                    article.source_name,
+                )
+                image = fallback_image
+                message_id = publisher.publish_photo(article, rewrite, image)
             database.mark_posted(
                 article,
                 rewrite.title,

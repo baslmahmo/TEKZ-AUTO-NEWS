@@ -105,6 +105,23 @@ class ImageResolver:
             logger.debug("Could not download image %s: %s", url, exc)
             return None
 
+    @staticmethod
+    def _fallback_url(article: NewsArticle) -> str:
+        category = (
+            "ai"
+            if article.category.lower()
+            in {"ai", "artificial intelligence", "ذكاء اصطناعي"}
+            else "technology"
+        )
+        return FALLBACK_IMAGES[category]
+
+    def resolve_fallback(self, article: NewsArticle) -> ResolvedImage:
+        fallback_url = self._fallback_url(article)
+        image = self._download(fallback_url)
+        if image is None:
+            raise RuntimeError("Could not download the safe fallback image for this article.")
+        return image
+
     def resolve(self, article: NewsArticle) -> ResolvedImage:
         candidates: list[str] = []
         if article.image_url:
@@ -113,8 +130,7 @@ class ImageResolver:
         if og_image:
             candidates.append(og_image)
 
-        category = "ai" if article.category.lower() in {"ai", "artificial intelligence", "ذكاء اصطناعي"} else "technology"
-        candidates.append(FALLBACK_IMAGES[category])
+        candidates.append(self._fallback_url(article))
 
         seen: set[str] = set()
         for candidate in candidates:

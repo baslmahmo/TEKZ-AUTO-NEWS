@@ -12,7 +12,7 @@ from urllib.parse import parse_qs, urlparse
 from tekz_auto_news.bot import _publish_cycle, _safe_error_message
 from tekz_auto_news.config import Settings, _normalize_telegram_chat_id
 from tekz_auto_news.database import NewsDatabase
-from tekz_auto_news.images import ResolvedImage
+from tekz_auto_news.images import FALLBACK_IMAGES, ImageResolver, ResolvedImage
 from tekz_auto_news.models import ArabicRewrite, NewsArticle
 from tekz_auto_news.openai_rewriter import ArabicNewsRewriter
 from tekz_auto_news.telegram_controls import TelegramUpdateListener
@@ -125,6 +125,21 @@ class NewsFeatureTests(unittest.TestCase):
         prompt = rewriter._create_completion.call_args.kwargs["messages"][0]["content"]
         self.assertIn("شرح عملي لتطبيق", prompt)
         self.assertIn("تجنب العبارات الآلية", prompt)
+
+    def test_image_resolver_can_select_the_standard_category_fallback(self) -> None:
+        resolver = ImageResolver(timeout_seconds=5)
+        fallback = ResolvedImage(
+            b"fallback",
+            "fallback.jpg",
+            "image/jpeg",
+            FALLBACK_IMAGES["ai"],
+        )
+        resolver._download = Mock(return_value=fallback)  # type: ignore[method-assign]
+
+        result = resolver.resolve_fallback(sample_article())
+
+        self.assertEqual(result, fallback)
+        resolver._download.assert_called_once_with(FALLBACK_IMAGES["ai"])
 
     def test_long_caption_with_html_characters_stays_under_telegram_limit(self) -> None:
         rewrite = ArabicRewrite(
@@ -369,6 +384,71 @@ class NewsFeatureTests(unittest.TestCase):
         self.assertEqual(posted, 1)
         self.assertEqual(database.claim.call_count, 1)
         self.assertEqual(publisher.publish_photo.call_count, 1)
+
+    def test_cycle_retries_invalid_photo_with_a_standard_fallback(self) -> None:
+        settings = Settings(
+            openrouter_api_key="test",
+            telegram_bot_token="test",
+            telegram_chat_id="@test",
+            telegram_channel_url="https://t.me/channel",
+            telegram_group_url="https://t.me/group",
+            openrouter_model="openai/gpt-4o-mini",
+            poll_interval_minutes=15,
+            max_articles_per_cycle=1,
+            max_article_age_hours=72,
+            fetch_timeout_seconds=20,
+            publish_timezone="UTC",
+            publish_start_hour=0,
+            publish_end_hour=23,
+            database_path=Path(":memory:"),
+            sources_path=Path("rss_sources.json"),
+            log_level="INFO",
+        )
+        article = sample_article()
+        database = Mock()
+        database.is_empty.return_value = False
+        database.claim.return_value = True
+        database.poll_created_within.return_value = True
+        database.posted_count.return_value = 1
+        database.recent_post_styles.return_value = []
+        rewriter = Mock()
+        rewriter.rewrite.return_value = sample_rewrite()
+        publisher = Mock()
+        publisher.publish_photo.side_effect = [
+            RuntimeError("Telegram sendPhoto failed: Bad Request: PHOTO_INVALID_DIMENSIONS"),
+            "23",
+        ]
+        original_image = ResolvedImage(
+            b"source",
+            "source.png",
+            "image/png",
+            "https://example.com/source.png",
+        )
+        fallback_image = ResolvedImage(
+            b"fallback",
+            "fallback.jpg",
+            "image/jpeg",
+            FALLBACK_IMAGES["ai"],
+        )
+        image_resolver = Mock()
+        image_resolver.resolve.return_value = original_image
+        image_resolver.resolve_fallback.return_value = fallback_image
+
+        with patch("tekz_auto_news.bot.load_sources", return_value=[{"name": "feed"}]), patch(
+            "tekz_auto_news.bot.fetch_latest", return_value=[article]
+        ):
+            posted = _publish_cycle(
+                settings,
+                database,
+                rewriter,
+                publisher,
+                image_resolver,
+                force=True,
+            )
+
+        self.assertEqual(posted, 1)
+        self.assertEqual(publisher.publish_photo.call_count, 2)
+        self.assertEqual(database.mark_posted.call_args.args[3], fallback_image.url)
 
     def test_admin_commands_reply_and_request_a_single_scan(self) -> None:
         publisher = Mock()
