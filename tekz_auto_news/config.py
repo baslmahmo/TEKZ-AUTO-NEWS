@@ -107,7 +107,7 @@ def load_settings() -> Settings:
     except ZoneInfoNotFoundError as exc:
         raise ValueError("PUBLISH_TIMEZONE must be a valid IANA timezone name.") from exc
 
-    additional_chat_id = os.getenv("TELEGRAM_ADDITIONAL_CHAT_ID", "@baslmahmod").strip()
+    additional_chat_id = os.getenv("TELEGRAM_ADDITIONAL_CHAT_ID", "@basltek").strip()
     return Settings(
         openrouter_api_key=os.environ["OPENROUTER_API_KEY"].strip(),
         telegram_bot_token=os.environ["TELEGRAM_BOT_TOKEN"].strip(),

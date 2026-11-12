@@ -54,3 +54,4 @@ externalPort = 8081
 
 [userenv.shared]
 TELEGRAM_CHAT_ID = "https://t.me/t_ekz"
+TELEGRAM_ADDITIONAL_CHAT_ID = "@basltek"
